@@ -1,4 +1,4 @@
-name: Deploy Spring Boot App to Docker Server
+name: Build, Analyze and Deploy Spring Boot App
 
 on:
   push:
@@ -6,9 +6,59 @@ on:
       - main
 
 jobs:
-  deploy:
+  # ------ NUEVO JOB: CONSTRUIR Y ANALIZAR CON SONARQUBE ------
+  build-and-analyze:
+    name: Build and Analyze
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          # Necesario para que SonarQube pueda analizar correctamente el historial de commits
+          fetch-depth: 0  
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17' # Asegúrate que coincida con la versión de Java de tu proyecto
+          distribution: 'temurin'
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Build and analyze with Maven and SonarQube
+        # El comando mvn -B verify sonar:sonar ejecuta la construcción y el análisis
+        # Debes configurar las variables de entorno para que SonarQube se conecte
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Token de GitHub para la decoración de Pull Requests
+          SONAR_TOKEN: ${{ secrets.EXAMEN_LIZ }} # ¡Aquí usamos tu nueva clave!
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} # Debes crear este secreto
+        run: |
+          # El análisis se hará sobre el código dentro de la carpeta MICRO-PRODUCT
+          cd MICRO-PRODUCT
+          # Reemplaza 'tu-organizacion' y 'tu-proyecto' con tus valores de SonarCloud/SonarQube
+          mvn -B verify sonar:sonar \
+            -Dsonar.projectKey=tu-organizacion_tu-proyecto \
+            -Dsonar.organization=tu-organizacion
+
+  # ------ JOB EXISTENTE: DESPLEGAR EN EL SERVIDOR ------
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    # Este job 'deploy' necesita que 'build-and-analyze' termine con éxito
+    needs: build-and-analyze
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -19,8 +69,9 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Copy project to server
+        # Se copia la carpeta MICRO-PRODUCT al servidor
         run: |
-          rsync -avz --delete ./micro-product ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/home/${{ secrets.SSH_USER }}/micro-product
+          rsync -avz --delete ./MICRO-PRODUCT/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/home/${{ secrets.SSH_USER }}/micro-product
 
       - name: Build and run Docker on server
         run: |
