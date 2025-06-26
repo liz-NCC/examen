@@ -1,16 +1,62 @@
 version: '3.8'
 
 services:
-  micro_product:
+  # 1. Tu microservicio (hemos mantenido tus nombres)
+  app:
     container_name: product_app_2025
     image: micro/product:1.0.0
     build:
-      context: ..
+      context: .. # El contexto es la raíz del proyecto
       dockerfile: docker/Dockerfile
     ports:
-      - "8086:8080"
+      - "8086:8080" # Correcto: Acceso externo por 8086, interno de la app en 8080
     networks:
       - backend
+    depends_on:
+      - db # La app no se iniciará hasta que la base de datos esté lista
+    environment:
+      # Variables para que Spring Boot se conecte a la DB
+      - SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/micro_db_2025?useSSL=false&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_USERNAME=user_prod
+      - SPRING_DATASOURCE_PASSWORD=password_prod
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+
+  # 2. El servicio de Base de Datos que faltaba
+  db:
+    image: mysql:8.0
+    container_name: micro_product_db_2025
+    networks:
+      - backend
+    environment:
+      - MYSQL_DATABASE=micro_db_2025
+      - MYSQL_USER=user_prod
+      - MYSQL_PASSWORD=password_prod
+      - MYSQL_ROOT_PASSWORD=rootpassword
+    volumes:
+      - db_data:/var/lib/mysql
+
+  # 3. El servicio de SonarQube que faltaba
+  sonar:
+    image: sonarqube:9-community
+    container_name: sonarqube_server_2025
+    ports:
+      - "9000:9000" # Acceso a la UI de Sonar por el puerto 9000
+    networks:
+      - backend
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonar_data:/opt/sonarqube/data
+      - sonar_extensions:/opt/sonarqube/extensions
+      - sonar_logs:/opt/sonarqube/logs
+
+# Definimos la red y los volúmenes
 networks:
   backend:
     name: micro_product_net
+
+volumes:
+  db_data:
+  sonar_data:
+  sonar_extensions:
+  sonar_logs:

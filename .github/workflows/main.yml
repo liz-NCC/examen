@@ -1,32 +1,74 @@
-name: Deploy Spring Boot App to Docker Server
+name: Build, Analyze and Deploy Locally
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  DOCKER_COMPOSE_PROJECT_NAME: 'examen-liz'
+  APP_CONTAINER_NAME: 'product_app_2025'
+  DB_CONTAINER_NAME: 'micro_product_db_2025'
+  DB_NAME: 'micro_db_2025'
+  DB_USER: 'root'
+  DB_PASSWORD: 'rootpassword'
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  build-analyze-deploy:
+    runs-on: self-hosted
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: 1. Checkout del código
+        uses: actions/checkout@v4
 
-      - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.7.0
+      - name: 2. Configurar Java (JDK 17)
+        uses: actions/setup-java@v4
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
 
-      - name: Copy project to server
+      - name: 3. Limpiar despliegues anteriores y levantar SonarQube
         run: |
-          rsync -avz --delete ./micro-product ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/home/${{ secrets.SSH_USER }}/micro-product
+          echo "🧹 Limpiando entorno Docker anterior..."
+          cd docker
+          docker-compose -p ${{ env.DOCKER_COMPOSE_PROJECT_NAME }} down -v --remove-orphans || echo "⚠️ No se encontró un despliegue anterior."
+          
+          echo "🚀 Levantando SonarQube y la Base de Datos..."
+          # Levanta solo sonar y la db para el análisis
+          docker-compose -p ${{ env.DOCKER_COMPOSE_PROJECT_NAME }} up -d sonar db
+          echo "⏳ Esperando 30 segundos a que SonarQube inicie..."
+          sleep 30
 
-      - name: Build and run Docker on server
+      - name: 4. Construir y Analizar con SonarQube
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-            cd /home/${{ secrets.SSH_USER }}/micro-product/docker
-            docker stop micro-product || true && docker rm micro-product || true
-            docker build -t micro-product .
-            docker run -d -p 8080:8080 --name micro-product micro-product
-          EOF
+          echo "🔬 Ejecutando análisis de SonarQube..."
+          # Usamos localhost:9000 porque el runner (host) tiene acceso a ese puerto
+          mvn -B clean verify sonar:sonar \
+            -Dsonar.login=${{ secrets.EXAMEN_LIZ }} \
+            -Dsonar.host.url=http://localhost:9000
+
+      - name: 5. Desplegar la aplicación
+        run: |
+          echo "✅ Análisis completado. Desplegando la aplicación..."
+          cd docker
+          # Ahora levanta (o reconstruye y levanta) el servicio de la app
+          docker-compose -p ${{ env.DOCKER_COMPOSE_PROJECT_NAME }} up -d --build app
+          echo "⏳ Esperando 20 segundos para que la App se estabilice..."
+          sleep 20
+
+      - name: 6. Inicializar Base de Datos (Opcional)
+        if: success() # Solo si los pasos anteriores funcionaron
+        run: |
+          echo "💾 Ejecutando script de inicialización SQL..."
+          # Asegúrate de que la ruta a tu archivo .sql sea correcta
+          docker exec -i ${{ env.DB_CONTAINER_NAME }} mysql -u${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} < ./sql/init.sql || echo "⚠️ No se pudo ejecutar el script SQL (¿existe en la carpeta 'sql'?)"
+
+      - name: 7. Verificar estado final
+        run: |
+          echo "🎉 ¡Despliegue completado!"
+          echo "🔍 Estado final de los contenedores:"
+          cd docker
+          docker-compose -p ${{ env.DOCKER_COMPOSE_PROJECT_NAME }} ps
+          echo "🗒️ Logs recientes de la aplicación:"
+          docker logs --tail 100 ${{ env.APP_CONTAINER_NAME }}
